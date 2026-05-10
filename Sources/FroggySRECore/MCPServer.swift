@@ -7,9 +7,11 @@ import Foundation
 /// Daemon mode (SREDaemon): runs the full 5-agent pipeline autonomously.
 public actor MCPServer {
     private let store: IncidentStore
+    private let resolutionStore: ResolutionStore
 
     public init() {
-        store = IncidentStore()
+        store           = IncidentStore()
+        resolutionStore = ResolutionStore()
     }
 
     public func run() async {
@@ -51,16 +53,14 @@ public actor MCPServer {
 
     private func handleCall(name: String, args: [String: Any]) async -> [String: Any] {
         switch name {
-        case "sre_analyze": return await analyzeTool(args: args)
-        case "sre_history": return await historyTool(args: args)
-        default:            return errorContent("unknown tool: \(name)")
+        case "sre_analyze":  return await analyzeTool(args: args)
+        case "sre_history":  return await historyTool(args: args)
+        case "sre_resolve":  return await resolveTool(args: args)
+        default:             return errorContent("unknown tool: \(name)")
         }
     }
 
     // MARK: - sre_analyze
-    //
-    // Collects live k8s data + local-model anamnesis, then returns everything
-    // to Claude for reasoning. Claude IS the diagnosis layer in MCP mode.
 
     private func analyzeTool(args: [String: Any]) async -> [String: Any] {
         let incident = Incident(
@@ -77,7 +77,6 @@ public actor MCPServer {
         )
         let anamnesis = await AnamnesisCollector().collect(incident: enriched, context: ctx)
 
-        // Persist to history so sre_history can surface past similar cases.
         let record = IncidentReport(
             incident:   enriched,
             analysis:   Analysis(summary: anamnesis),
@@ -102,6 +101,45 @@ public actor MCPServer {
         } catch {
             return errorContent("failed to load history: \(error)")
         }
+    }
+
+    // MARK: - sre_resolve
+
+    private func resolveTool(args: [String: Any]) async -> [String: Any] {
+        guard let actualFix = args["actualFix"] as? String, !actualFix.isEmpty else {
+            return errorContent("actualFix is required")
+        }
+        let commitUrl   = args["commitUrl"]   as? String
+        let incidentRef = args["incidentRef"] as? String
+
+        let candidates = (try? await store.load(limit: 50)) ?? []
+        guard !candidates.isEmpty else { return errorContent("no incidents in history — run sre_analyze first") }
+
+        let stored: StoredIncident?
+        if let ref = incidentRef {
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withInternetDateTime]
+            stored = candidates.first { s in
+                let alert = s.report.incident.labels["alertname"] ?? ""
+                let ts    = fmt.string(from: s.timestamp)
+                return alert.localizedCaseInsensitiveContains(ref) || ts.hasPrefix(ref)
+            }
+        } else {
+            stored = candidates.first
+        }
+
+        guard let stored else {
+            return errorContent("no matching incident found for ref '\(incidentRef ?? "")'")
+        }
+
+        let resolution = Resolution(actualFix: actualFix, commitUrl: commitUrl, resolvedAt: Date())
+        let score      = (try? await ScoringAgent().score(report: stored.report, resolution: resolution))
+            ?? ResolutionScore(rootCauseScore: -1, fixScore: -1, rationale: "scoring failed")
+
+        let resolved = ResolvedIncident(stored: stored, resolution: resolution, score: score)
+        try? await resolutionStore.save(resolved)
+
+        return textContent(formatResolved(resolved))
     }
 
     // MARK: - Tool list
@@ -135,6 +173,23 @@ public actor MCPServer {
                         "limit": ["type": "integer", "description": "Max incidents to return (default: 10)"]
                     ]
                 ]
+            ],
+            [
+                "name": "sre_resolve",
+                "description": """
+                Record how an incident was actually resolved and score the pipeline's prediction against the real fix.
+                Saves to ~/.froggy-sre/resolved/ (local only, never in git).
+                Use after an incident is closed to build the eval dataset over time.
+                """,
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "actualFix":    ["type": "string", "description": "What actually fixed the incident (free text + commands used)."],
+                        "commitUrl":    ["type": "string", "description": "Optional: GitLab/GitHub commit URL of the fix."],
+                        "incidentRef":  ["type": "string", "description": "Optional: alertname substring or ISO timestamp prefix to match a specific incident. Defaults to the most recent."]
+                    ],
+                    "required": ["actualFix"]
+                ]
             ]
         ]
     }
@@ -152,6 +207,32 @@ public actor MCPServer {
         \(index). \(ts) — \(alert)\(namespace)\(hasCtx ? " [k8s ctx]" : "")
            \(clip(stored.report.analysis.summary, 200))
         """
+    }
+
+    private func formatResolved(_ r: ResolvedIncident) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm"
+        let alert     = r.stored.report.incident.labels["alertname"] ?? "unknown"
+        let namespace = r.stored.report.incident.labels["namespace"].map { " (\($0))" } ?? ""
+        let rcPct  = r.score.rootCauseScore >= 0 ? String(format: "%.0f%%", r.score.rootCauseScore * 100) : "n/a"
+        let fixPct = r.score.fixScore       >= 0 ? String(format: "%.0f%%", r.score.fixScore * 100)       : "n/a"
+        var lines = [
+            "✓ Resolved: \(alert)\(namespace) [\(fmt.string(from: r.stored.timestamp))]",
+            "",
+            "Predicted root cause:  \(clip(r.stored.report.hypothesis.rootCause, 300))",
+            "Predicted fix:         \(clip(r.stored.report.fix.action, 300))",
+            "",
+            "Actual fix:            \(r.resolution.actualFix)",
+        ]
+        if let url = r.resolution.commitUrl { lines.append("Commit:                \(url)") }
+        lines += [
+            "",
+            "Score — root cause: \(rcPct)   fix: \(fixPct)",
+            "Rationale: \(r.score.rationale)",
+            "",
+            "Saved to ~/.froggy-sre/resolved/"
+        ]
+        return lines.joined(separator: "\n")
     }
 
     private func clip(_ text: String, _ length: Int) -> String {
