@@ -2,6 +2,18 @@ import Testing
 import Foundation
 @testable import FroggySRECore
 
+// MARK: - MockLLM
+
+struct MockLLM: LLMCompleting {
+    let response: String
+    func complete(system: String, user: String) async throws -> String { response }
+}
+
+struct FailingLLM: LLMCompleting {
+    struct Fail: Error {}
+    func complete(system: String, user: String) async throws -> String { throw Fail() }
+}
+
 // MARK: - Incident
 
 @Test func labelString_containsAllLabels() {
@@ -139,19 +151,17 @@ private func makeReport(alertname: String) -> IncidentReport {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    // Write a JSON file with creation date 40 days ago
     let oldFile = dir.appendingPathComponent("old-incident.json")
     try "{}".write(to: oldFile, atomically: true, encoding: .utf8)
     let pastDate = Date().addingTimeInterval(-40 * 86_400)
     try (oldFile as NSURL).setResourceValue(pastDate, forKey: .creationDateKey)
 
-    // Store with maxAgeDays=30 — saving any report should trigger prune
     let store = IncidentStore(directory: dir, maxAgeDays: 30)
     try await store.save(makeReport(alertname: "Trigger"))
 
     let remaining = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-    #expect(!remaining.contains("old-incident.json"), "old file should have been pruned")
-    #expect(remaining.count == 1, "only the new incident file should remain")
+    #expect(!remaining.contains("old-incident.json"), "старый файл должен быть удалён prune()")
+    #expect(remaining.count == 1, "должен остаться только новый инцидент")
 }
 
 // MARK: - K8sFacts.peerNamespace
@@ -176,6 +186,69 @@ private func makeReport(alertname: String) -> IncidentReport {
 }
 
 @Test func peerNamespace_squadNoSuffix_returnsNil() {
-    // "squad-1" has no trailing "-suffix" so should not match
     #expect(K8sFacts.peerNamespace("squad-1") == nil)
+}
+
+// MARK: - AgentPipeline smoke test (MockLLM — без реального LLM)
+
+private func crashLoopIncident() -> Incident {
+    Incident(
+        labels: ["alertname": "PodCrashLooping", "namespace": "squad-1-payments", "pod": "api-7f9b"],
+        annotations: ["summary": "Pod restarted 8 times in 15 minutes"],
+        startsAt: "2026-05-10T12:00:00Z"
+    )
+}
+
+@Test func pipeline_smoke_withMockLLM_producesFullReport() async throws {
+    let mock = MockLLM(response: "SCORE: 0.3\nRATIONALE: Low risk, pod restart is safe.")
+    let pipeline = AgentPipeline(llm: mock)
+    let report = try await pipeline.process(crashLoopIncident())
+
+    #expect(!report.analysis.summary.isEmpty)
+    #expect(!report.hypothesis.rootCause.isEmpty)
+    #expect(!report.fix.action.isEmpty)
+    #expect(report.risk.score >= 0.0 && report.risk.score <= 1.0)
+    #expect(report.incident.labels["alertname"] == "PodCrashLooping")
+}
+
+@Test func pipeline_smoke_savesReportToStore() async throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("froggy-sre-pipeline-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let mock     = MockLLM(response: "SCORE: 0.2\nRATIONALE: Safe operation.")
+    let store    = IncidentStore(directory: dir)
+    let pipeline = AgentPipeline(llm: mock, store: store)
+    _ = try await pipeline.process(crashLoopIncident())
+
+    let saved = try await store.load(limit: 5)
+    #expect(saved.count == 1)
+    #expect(saved[0].report.incident.labels["alertname"] == "PodCrashLooping")
+}
+
+// MARK: - guardOutput (через PipelineStageError)
+
+@Test func pipeline_guardOutput_throwsOnEmptyResponse() async throws {
+    let mock     = MockLLM(response: "")
+    let pipeline = AgentPipeline(llm: mock)
+    do {
+        _ = try await pipeline.process(crashLoopIncident())
+        Issue.record("ожидался PipelineStageError, но pipeline прошёл")
+    } catch let e as PipelineStageError {
+        #expect(e.stage == "Analyzer")
+        #expect(e.reason.contains("too short"))
+    }
+}
+
+@Test func pipeline_guardOutput_throwsOnRefusal() async throws {
+    let mock     = MockLLM(response: "I cannot help with this request because it involves infrastructure.")
+    let pipeline = AgentPipeline(llm: mock)
+    do {
+        _ = try await pipeline.process(crashLoopIncident())
+        Issue.record("ожидался PipelineStageError, но pipeline прошёл")
+    } catch let e as PipelineStageError {
+        #expect(e.stage == "Analyzer")
+        #expect(e.reason.contains("refused"))
+    }
 }
