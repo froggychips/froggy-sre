@@ -1,13 +1,13 @@
-/// Five-stage incident analysis pipeline.
-/// Enriches the incident with live k8s context before the first agent runs,
-/// then surfaces similar past incidents to inform the hypothesis stage.
+/// Пятиэтапный пайплайн анализа инцидентов.
+/// Обогащает инцидент живым k8s-контекстом перед первым агентом,
+/// затем передаёт похожие прошлые инциденты в Hypothesis-агент.
 public actor AgentPipeline {
     private let store: IncidentStore
     private let llm: any LLMCompleting
 
-    public init(llm: any LLMCompleting = LLMRouter()) {
-        self.store = IncidentStore()
+    public init(llm: any LLMCompleting = LLMRouter(), store: IncidentStore = IncidentStore()) {
         self.llm   = llm
+        self.store = store
     }
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
@@ -34,26 +34,25 @@ public actor AgentPipeline {
 
         let risk = try await RiskAgent(llm: llm).run(enriched, fix)
 
-        return IncidentReport(
+        let report = IncidentReport(
             incident:   enriched,
             analysis:   analysis,
             hypothesis: hypothesis,
             fix:        fix,
             risk:       risk
         )
+        try? await store.save(report)
+        return report
     }
 
     // MARK: - Private
 
-    /// Throws if the stage output is too short or looks like an LLM refusal.
-    /// Catches truncated/empty responses and generic "I cannot help" replies
-    /// before they silently propagate as plausible context to the next stage.
     private func guardOutput(_ text: String, stage: String) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 30 else {
             throw PipelineStageError(stage: stage, reason: "output too short (\(trimmed.count) chars)")
         }
-        let lower = trimmed.lowercased()
+        let lower    = trimmed.lowercased()
         let refusals = ["i cannot", "i'm unable", "i don't have access", "as an ai,", "as an ai assistant"]
         if refusals.contains(where: { lower.hasPrefix($0) }) {
             throw PipelineStageError(stage: stage, reason: "LLM refused: \(String(trimmed.prefix(80)))")
