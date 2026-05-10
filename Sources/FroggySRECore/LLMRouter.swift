@@ -1,11 +1,16 @@
 import Foundation
 import FroggyKit
 
+/// Enables LLM dependency injection — production code uses LLMRouter, tests use MockLLM.
+public protocol LLMCompleting: Sendable {
+    func complete(system: String, user: String) async throws -> String
+}
+
 /// Routes LLM calls to the local Froggy daemon when available;
 /// falls back to Anthropic API otherwise.
 ///
 /// Priority: Froggy (private, free) → Anthropic (cloud, requires API key)
-struct LLMRouter: Sendable {
+struct LLMRouter: LLMCompleting, Sendable {
     private let froggy    = FroggyClient()
     private let anthropic = AnthropicClient()
 
