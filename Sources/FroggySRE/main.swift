@@ -1,4 +1,4 @@
 import FroggySRECore
 
-let daemon = SREDaemon()
-await daemon.run()
+let server = MCPServer()
+await server.run()
