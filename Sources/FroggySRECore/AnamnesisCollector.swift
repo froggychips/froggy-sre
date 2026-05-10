@@ -1,8 +1,8 @@
 import Foundation
 import FroggyKit
 
-/// Uses the local Froggy model to extract structured facts from raw k8s data.
-/// Does NOT diagnose — only extracts. Claude does the reasoning from the result.
+/// Использует локальную модель Froggy для извлечения структурированных фактов из k8s-данных.
+/// НЕ диагностирует — только извлекает. Диагностику делает Claude Code из результата.
 public struct AnamnesisCollector: Sendable {
     private let llm = LLMRouter()
     public init() {}
@@ -16,8 +16,8 @@ public struct AnamnesisCollector: Sendable {
 
     private func extractFacts(incident: Incident, context: K8sContext) async -> String {
         var rawParts: [String] = []
-        if let logs = context.podLogs      { rawParts.append("=== Pod logs (tail) ===\n\(logs)") }
-        if let evts = context.recentEvents { rawParts.append("=== Warning events ===\n\(evts)") }
+        if let logs = context.podLogs        { rawParts.append("=== Pod logs (tail) ===\n\(logs)") }
+        if let evts = context.recentEvents   { rawParts.append("=== Warning events ===\n\(evts)") }
         if let desc = context.podDescription { rawParts.append("=== Pod describe ===\n\(desc)") }
 
         guard !rawParts.isEmpty else { return "(no k8s data — kubectl unavailable or pod/namespace not found)" }
@@ -85,6 +85,22 @@ public struct AnamnesisCollector: Sendable {
         if context.isEmpty {
             out.append("*No k8s context fetched. Add `namespace` and `pod` labels to enable kubectl enrichment.*")
         }
+
+        // Synthesis checklist — instructs Claude Code to validate fix vs root cause
+        out.append("""
+        ---
+        ### Your diagnosis
+
+        Using the facts above, provide:
+
+        1. **Root cause** — specific and evidence-backed (cite key facts by bullet)
+        2. **Fix** — concrete steps, `kubectl` commands or config changes, priority-ordered
+        3. **Fix addresses root cause?** — answer YES or NO explicitly.\\
+           If NO: explain the misalignment and propose an alternative fix that does.
+        4. **Risk** — LOW / MEDIUM / HIGH + the key concern
+        5. **Confidence** — 0–100% and what additional data would increase it
+        """)
+
         return out.joined(separator: "\n\n")
     }
 }
