@@ -8,7 +8,7 @@
 [froggy-mcp](https://github.com/froggychips/froggy-mcp) connects Froggy to Claude Code.
 `froggy-sre` adds the SRE layer — feed it a Prometheus alert and it automatically pulls pod logs
 and k8s events via `kubectl`, runs a 5-stage analysis pipeline, and returns a structured report
-(what’s happening, root cause, critique, proposed fix, risk score). Everything saved locally.
+(what's happening, root cause, critique, proposed fix, risk score). Everything saved locally.
 
 LLM calls go to the Froggy daemon first (private, no API key); falls back to Anthropic API.
 
@@ -52,7 +52,7 @@ Claude Code  ←—stdio / JSON-RPC—→  froggy-sre
 ```
 sre_analyze
   → K8sContextFetcher  — pod logs, warning events, pod description (via kubectl)
-  → Analyzer           — what’s happening, immediate impact
+  → Analyzer           — what's happening, immediate impact
   → Hypothesis         — most likely root cause
   → Critic             — weaknesses in the hypothesis
   → Fix                — concrete kubectl / config remediation
@@ -111,6 +111,20 @@ echo '{"labels":{"alertname":"PodCrashLooping","namespace":"squad-prod","pod":"a
 | `FROGGY_SRE_SOCKET` | `/tmp/froggy-sre.sock` | Daemon mode listen socket |
 | `FROGGY_SRE_MODEL` | `claude-haiku-4-5-20251001` | Anthropic model for fallback |
 | `FROGGY_SRE_MAX_TOKENS` | `1024` | Max tokens per LLM call |
+
+## froggy-sre vs sre-ai-copilot
+
+Both run the same 5-stage incident pipeline. Choose based on your context:
+
+| | froggy-sre | [sre-ai-copilot](https://github.com/froggychips/sre-ai-copilot) |
+|---|---|---|
+| **Trigger** | MCP tool call from Claude Code | AlertManager webhook (headless) |
+| **Runtime** | macOS dev machine | Any server / k8s pod |
+| **LLM** | Froggy local → Anthropic fallback | Anthropic API |
+| **k8s context** | `kubectl` via kubeconfig | In-cluster k8s SDK |
+| **Storage** | `~/.froggy-sre/incidents/` (local JSON) | SQLite + Celery queue |
+| **Notifications** | Structured response in Claude Code | Discord webhook |
+| **Use when** | You're at your Mac and want Claude to analyse an incident interactively | You need always-on headless alerting running in production |
 
 ## Roadmap
 
