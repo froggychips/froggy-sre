@@ -12,6 +12,16 @@ struct LLMRouter: Sendable {
         if let result = try? await froggy.generate(prompt: "\(system)\n\n\(user)") {
             return result
         }
+        guard !anthropic.apiKey.isEmpty else {
+            throw LLMRouterError.noBackendAvailable
+        }
         return try await anthropic.complete(system: system, user: user)
+    }
+}
+
+enum LLMRouterError: Error, LocalizedError {
+    case noBackendAvailable
+    var errorDescription: String? {
+        "нет доступного LLM-бэкенда: запусти Froggy daemon или задай ANTHROPIC_API_KEY"
     }
 }

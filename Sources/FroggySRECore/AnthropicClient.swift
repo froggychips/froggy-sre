@@ -17,14 +17,14 @@ struct AnthropicClient: Sendable {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("application/json",  forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey,              forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model,
+            "model":      model,
             "max_tokens": 1024,
-            "system": system,
-            "messages": [["role": "user", "content": user]]
+            "system":     system,
+            "messages":   [["role": "user", "content": user]]
         ])
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -40,8 +40,16 @@ struct AnthropicClient: Sendable {
     }
 }
 
-enum AnthropicError: Error {
+enum AnthropicError: Error, LocalizedError {
     case missingAPIKey
     case httpError(Int)
     case invalidResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey:    return "ANTHROPIC_API_KEY не задан"
+        case .httpError(let c): return "Anthropic API вернул HTTP \(c)"
+        case .invalidResponse:  return "Anthropic API: неожиданный формат ответа"
+        }
+    }
 }
