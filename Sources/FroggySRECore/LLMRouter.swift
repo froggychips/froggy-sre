@@ -1,3 +1,4 @@
+import Foundation
 import FroggyKit
 
 /// Routes LLM calls to the local Froggy daemon when available;
