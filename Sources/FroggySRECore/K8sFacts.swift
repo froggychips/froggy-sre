@@ -44,6 +44,9 @@ public struct K8sFacts: Sendable {
                     + (peerUnhealthy.isEmpty ? "none (healthy)" : peerUnhealthy.joined(separator: ", "))
                 )
             }
+        } else if namespace.hasPrefix("squad-") {
+            // namespace looks like squad but didn't match squad-N-suffix — log so it's observable
+            fputs("[froggy-sre] warning: namespace '\(namespace)' starts with 'squad-' but doesn't match squad-<N>-<suffix> pattern — peer comparison skipped\n", stderr)
         }
 
         return lines.joined(separator: "\n")
