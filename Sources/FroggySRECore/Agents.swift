@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Domain types
 
-public struct Incident: Sendable {
+public struct Incident: Sendable, Codable {
     public let labels: [String: String]
     public let annotations: [String: String]
     public let startsAt: String
@@ -18,7 +18,7 @@ public struct Incident: Sendable {
     }
 }
 
-public struct IncidentReport: Sendable {
+public struct IncidentReport: Sendable, Codable {
     public let incident: Incident
     public let analysis: Analysis
     public let hypothesis: Hypothesis
@@ -26,11 +26,11 @@ public struct IncidentReport: Sendable {
     public let risk: RiskResult
 }
 
-public struct Analysis: Sendable   { public let summary: String }
-public struct Hypothesis: Sendable { public let rootCause: String }
-public struct Critique: Sendable   { public let validated: Bool; public let notes: String }
-public struct Fix: Sendable        { public let action: String }
-public struct RiskResult: Sendable { public let score: Double; public let rationale: String }
+public struct Analysis: Sendable, Codable   { public let summary: String }
+public struct Hypothesis: Sendable, Codable { public let rootCause: String }
+public struct Critique: Sendable, Codable   { public let validated: Bool; public let notes: String }
+public struct Fix: Sendable, Codable        { public let action: String }
+public struct RiskResult: Sendable, Codable { public let score: Double; public let rationale: String }
 
 // MARK: - Analyzer
 
