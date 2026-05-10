@@ -111,6 +111,8 @@ echo '{"labels":{"alertname":"PodCrashLooping","namespace":"squad-prod","pod":"a
 | `FROGGY_SRE_SOCKET` | `/tmp/froggy-sre.sock` | Daemon mode listen socket |
 | `FROGGY_SRE_MODEL` | `claude-haiku-4-5-20251001` | Anthropic model for fallback |
 | `FROGGY_SRE_MAX_TOKENS` | `1024` | Max tokens per LLM call |
+| `FROGGY_SRE_INCIDENTS_DIR` | `~/.froggy-sre/incidents/` | Path to incidents folder |
+| `FROGGY_SRE_MAX_AGE_DAYS` | `30` | Incident TTL in days (older files pruned on save) |
 
 ## froggy-sre vs sre-ai-copilot
 
@@ -135,8 +137,8 @@ Both run the same 5-stage incident pipeline. Choose based on your context:
 - [x] `K8sContextFetcher` — pod logs, k8s events, pod description via kubectl
 - [x] `FroggyKit` — shared IPC package (extracted from froggy-mcp + froggy-sre)
 - [x] Daemon mode — Unix socket server (`--daemon` flag)
-- [ ] Historical context — similar past incidents fed into Hypothesis agent
-- [ ] froggy-mcp integration — migrate froggy-mcp to use FroggyKit
+- [x] Historical context — similar past incidents surfaced via `findSimilar` in Hypothesis agent
+- [x] froggy-mcp integration — froggy-mcp imports FroggyKit via SPM
 
 ---
 *Part of the [Froggy](https://github.com/froggychips/Froggy) ecosystem.*
