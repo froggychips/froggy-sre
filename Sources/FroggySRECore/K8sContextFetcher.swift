@@ -43,8 +43,13 @@ public struct K8sContextFetcher: Sendable {
         await withCheckedContinuation { continuation in
             Task.detached {
                 let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                proc.arguments     = ["kubectl"] + args
+                if let path = ProcessInfo.processInfo.environment["KUBECTL_PATH"] {
+                    proc.executableURL = URL(fileURLWithPath: path)
+                    proc.arguments     = args
+                } else {
+                    proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                    proc.arguments     = ["kubectl"] + args
+                }
                 let out = Pipe()
                 proc.standardOutput = out
                 proc.standardError  = Pipe()
