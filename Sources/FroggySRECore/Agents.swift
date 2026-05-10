@@ -6,11 +6,18 @@ public struct Incident: Sendable, Codable {
     public let labels: [String: String]
     public let annotations: [String: String]
     public let startsAt: String
+    public let k8sContext: K8sContext?
 
-    public init(labels: [String: String], annotations: [String: String], startsAt: String) {
-        self.labels = labels
+    public init(
+        labels: [String: String],
+        annotations: [String: String],
+        startsAt: String,
+        k8sContext: K8sContext? = nil
+    ) {
+        self.labels     = labels
         self.annotations = annotations
-        self.startsAt = startsAt
+        self.startsAt   = startsAt
+        self.k8sContext = k8sContext
     }
 
     var labelString: String {
@@ -39,13 +46,18 @@ public actor Analyzer {
     public init() {}
 
     public func run(_ incident: Incident) async throws -> Analysis {
-        let annotations = incident.annotations
-            .map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+        let annotations = incident.annotations.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+        var ctx = ""
+        if let k = incident.k8sContext {
+            if let logs = k.podLogs   { ctx += "\nPod logs (tail):\n```\n\(logs)\n```" }
+            if let evts = k.recentEvents { ctx += "\nRecent k8s warning events:\n```\n\(evts)\n```" }
+        }
         let text = try await llm.complete(
             system: "You are a senior SRE analyzing a Kubernetes alert. Be concise and technical. 2-3 sentences.",
             user: """
             Alert: \(incident.labelString)
-            \(annotations.isEmpty ? "" : "Details:\n\(annotations)")
+            \(annotations.isEmpty ? "" : "Annotations:\n\(annotations)")
+            \(ctx)
             Started: \(incident.startsAt)
 
             What is happening and what is the immediate impact?
@@ -62,11 +74,16 @@ public actor HypothesisAgent {
     public init() {}
 
     public func run(_ incident: Incident, _ analysis: Analysis) async throws -> Hypothesis {
+        var ctx = ""
+        if let desc = incident.k8sContext?.podDescription {
+            ctx = "\nPod description:\n```\n\(desc)\n```"
+        }
         let text = try await llm.complete(
             system: "You are an SRE investigating a Kubernetes incident. Generate a specific root cause hypothesis. Technical, 2-3 sentences.",
             user: """
             Incident: \(incident.labelString)
             Analysis: \(analysis.summary)
+            \(ctx)
 
             What is the most likely root cause?
             """
@@ -102,11 +119,16 @@ public actor FixAgent {
     public init() {}
 
     public func run(_ incident: Incident, _ critique: Critique) async throws -> Fix {
+        var ctx = ""
+        if let evts = incident.k8sContext?.recentEvents {
+            ctx = "\nRecent k8s events:\n```\n\(evts)\n```"
+        }
         let text = try await llm.complete(
             system: "You are an SRE proposing a remediation. Suggest a concrete, safe fix. Include specific kubectl commands or config changes where applicable. 2-3 sentences.",
             user: """
             Incident: \(incident.labelString)
             Root cause analysis: \(critique.notes)
+            \(ctx)
 
             What is the safest, most effective fix?
             """

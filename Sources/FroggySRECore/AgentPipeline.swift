@@ -1,17 +1,24 @@
 /// Five-stage incident analysis pipeline.
-/// Each agent receives the original Incident for context + the previous stage's output.
+/// Enriches the incident with live k8s context before the first agent runs.
 public actor AgentPipeline {
     public init() {}
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
-        let namespace  = incident.labels["namespace"]
-        let analysis   = try await Analyzer().run(incident)
-        let hypothesis = try await HypothesisAgent().run(incident, analysis)
-        let critique   = try await CriticAgent().run(incident, hypothesis, namespace: namespace)
-        let fix        = try await FixAgent().run(incident, critique)
-        let risk       = try await RiskAgent().run(incident, fix)
+        let ctx      = await K8sContextFetcher().fetch(for: incident)
+        let enriched = ctx.isEmpty ? incident : Incident(
+            labels:      incident.labels,
+            annotations: incident.annotations,
+            startsAt:    incident.startsAt,
+            k8sContext:  ctx
+        )
+
+        let analysis   = try await Analyzer().run(enriched)
+        let hypothesis = try await HypothesisAgent().run(enriched, analysis)
+        let critique   = try await CriticAgent().run(enriched, hypothesis)
+        let fix        = try await FixAgent().run(enriched, critique)
+        let risk       = try await RiskAgent().run(enriched, fix)
         return IncidentReport(
-            incident:   incident,
+            incident:   enriched,
             analysis:   analysis,
             hypothesis: hypothesis,
             fix:        fix,

@@ -8,9 +8,13 @@ let package = Package(
         .executable(name: "froggy-sre", targets: ["FroggySRE"]),
         .library(name: "FroggySRECore", targets: ["FroggySRECore"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/froggychips/FroggyKit", branch: "main"),
+    ],
     targets: [
         .target(
             name: "FroggySRECore",
+            dependencies: [.product(name: "FroggyKit", package: "FroggyKit")],
             path: "Sources/FroggySRECore"
         ),
         .executableTarget(
