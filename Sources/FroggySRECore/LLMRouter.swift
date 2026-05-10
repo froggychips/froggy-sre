@@ -10,12 +10,16 @@ public protocol LLMCompleting: Sendable {
 ///
 /// froggy (default): Froggy daemon → Anthropic fallback
 /// lmstudio:         LM Studio local API → no fallback
+@usableFromInline
 struct LLMRouter: LLMCompleting, Sendable {
     private let froggy    = FroggyClient()
     private let anthropic = AnthropicClient()
     private let lmstudio  = LMStudioClient()
     private let backend   = ProcessInfo.processInfo.environment["FROGGY_SRE_BACKEND"] ?? "froggy"
 
+    @usableFromInline init() {}
+
+    @usableFromInline
     func complete(system: String, user: String) async throws -> String {
         switch backend {
         case "lmstudio":

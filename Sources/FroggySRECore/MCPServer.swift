@@ -82,6 +82,7 @@ public actor MCPServer {
             incident:   enriched,
             analysis:   Analysis(summary: anamnesis),
             hypothesis: Hypothesis(rootCause: "(pending — Claude)"),
+            critique:   nil,
             fix:        Fix(action: "(pending — Claude)"),
             risk:       RiskResult(score: -1, rationale: "(pending — Claude)")
         )

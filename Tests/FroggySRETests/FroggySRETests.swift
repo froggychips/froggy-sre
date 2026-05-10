@@ -254,3 +254,66 @@ private func crashLoopIncident() -> Incident {
         #expect(e.reason.contains("refused"))
     }
 }
+
+// MARK: - AnthropicClient retry
+
+/// URLProtocol stub: replays a pre-configured sequence of (statusCode, body) pairs.
+/// Tests that use this must run serially — see AnthropicRetryTests suite below.
+final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var queue: [(Int, Data)] = []
+    nonisolated(unsafe) static var callCount = 0
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let idx = Self.callCount
+        Self.callCount += 1
+        let (code, body) = Self.queue[idx]
+        let resp = HTTPURLResponse(url: request.url!, statusCode: code,
+                                   httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private func stubSession() -> URLSession {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubURLProtocol.self]
+    return URLSession(configuration: cfg)
+}
+
+private func anthropicSuccessBody(text: String) -> Data {
+    let json = ["content": [["type": "text", "text": text]]]
+    return try! JSONSerialization.data(withJSONObject: json)
+}
+
+@Suite(.serialized)
+struct AnthropicRetryTests {
+    @Test func retries_on429_succeeds_eventually() async throws {
+        StubURLProtocol.queue     = [(429, Data()), (429, Data()), (200, anthropicSuccessBody(text: "ok"))]
+        StubURLProtocol.callCount = 0
+
+        let client = AnthropicClient(apiKey: "test-key", session: stubSession(), retryBaseDelay: 0.001)
+        let result = try await client.complete(system: "s", user: "u")
+
+        #expect(result == "ok")
+        #expect(StubURLProtocol.callCount == 3)
+    }
+
+    @Test func exhaustedRetries_throws() async throws {
+        StubURLProtocol.queue     = [(429, Data()), (429, Data()), (429, Data()), (429, Data())]
+        StubURLProtocol.callCount = 0
+
+        let client = AnthropicClient(apiKey: "test-key", session: stubSession(), retryBaseDelay: 0.001)
+        do {
+            _ = try await client.complete(system: "s", user: "u")
+            Issue.record("expected throw")
+        } catch AnthropicError.httpError(let code) {
+            #expect(code == 429)
+            #expect(StubURLProtocol.callCount == 4)
+        }
+    }
+}
