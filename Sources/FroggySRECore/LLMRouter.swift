@@ -6,22 +6,29 @@ public protocol LLMCompleting: Sendable {
     func complete(system: String, user: String) async throws -> String
 }
 
-/// Routes LLM calls to the local Froggy daemon when available;
-/// falls back to Anthropic API otherwise.
+/// Routes LLM calls based on FROGGY_SRE_BACKEND env var.
 ///
-/// Priority: Froggy (private, free) → Anthropic (cloud, requires API key)
+/// froggy (default): Froggy daemon → Anthropic fallback
+/// lmstudio:         LM Studio local API → no fallback
 struct LLMRouter: LLMCompleting, Sendable {
     private let froggy    = FroggyClient()
     private let anthropic = AnthropicClient()
+    private let lmstudio  = LMStudioClient()
+    private let backend   = ProcessInfo.processInfo.environment["FROGGY_SRE_BACKEND"] ?? "froggy"
 
     func complete(system: String, user: String) async throws -> String {
-        if let result = try? await froggy.generate(prompt: "\(system)\n\n\(user)") {
-            return result
+        switch backend {
+        case "lmstudio":
+            return try await lmstudio.complete(system: system, user: user)
+        default:
+            if let result = try? await froggy.generate(prompt: "\(system)\n\n\(user)") {
+                return result
+            }
+            guard !anthropic.apiKey.isEmpty else {
+                throw LLMRouterError.noBackendAvailable
+            }
+            return try await anthropic.complete(system: system, user: user)
         }
-        guard !anthropic.apiKey.isEmpty else {
-            throw LLMRouterError.noBackendAvailable
-        }
-        return try await anthropic.complete(system: system, user: user)
     }
 }
 
