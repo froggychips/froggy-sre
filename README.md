@@ -10,8 +10,10 @@
 (what’s happening, root cause, critique, proposed fix, risk score) in one `sre_analyze` call.
 Everything is saved locally under `~/.froggy-sre/incidents/`.
 
-**Status:** working prototype. Not a product. Uses Anthropic API for LLM calls;
-routing to Froggy local inference is planned.
+LLM calls are routed to the local Froggy daemon first (private, no API key needed);
+if the daemon isn’t running or no model is loaded, it falls back to the Anthropic API.
+
+**Status:** working prototype. Not a product.
 
 💬 Contact: [@froggychips](https://t.me/froggychips) on Telegram  
 📜 License: [MIT](LICENSE)
@@ -28,7 +30,10 @@ routing to Froggy local inference is planned.
 | [sre-ai-copilot](https://github.com/froggychips/sre-ai-copilot) | Python K8s backend (cloud deploy) |
 
 ```
-Claude Code  ←—stdio / JSON-RPC—→  froggy-sre  ←—HTTPS—→  Anthropic API
+Claude Code  ←—stdio / JSON-RPC—→  froggy-sre
+                                      ↓ LLMRouter
+                              Froggy daemon (local, private)
+                              Anthropic API (fallback)
                                       ↓
                                ~/.froggy-sre/incidents/
 ```
@@ -51,11 +56,13 @@ sre_analyze
   → Risk         — score 0.0–1.0 + rationale
 ```
 
+Each stage calls `LLMRouter`: tries Froggy local inference first, falls back to Anthropic API.
+
 ## Requirements
 
 - macOS 14+, Apple Silicon
 - Swift 6
-- `ANTHROPIC_API_KEY` env var
+- [Froggy daemon](https://github.com/froggychips/Froggy) running **or** `ANTHROPIC_API_KEY` set (at least one required)
 
 ## Build
 
@@ -73,14 +80,23 @@ Add to `~/.claude.json` under `mcpServers`:
 "froggy-sre": {
   "command": "/path/to/.build/release/froggy-sre",
   "env": {
-    "ANTHROPIC_API_KEY": "sk-ant-..."
+    "ANTHROPIC_API_KEY": "sk-ant-..."  
   }
 }
 ```
 
+`ANTHROPIC_API_KEY` is optional if the Froggy daemon is running with a model loaded.
+
 After restarting Claude Code the `sre_analyze` and `sre_history` tools will be available in every session.
 
-Optional: override model via `FROGGY_SRE_MODEL` (default: `claude-haiku-4-5-20251001`).
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (fallback when Froggy unavailable) |
+| `FROGGY_IPC_SOCKET` | `~/Library/Application Support/Froggy/froggy.sock` | Froggy daemon socket path |
+| `FROGGY_SRE_MODEL` | `claude-haiku-4-5-20251001` | Anthropic model for fallback |
+| `FROGGY_SRE_MAX_TOKENS` | `1024` | Max tokens per LLM call |
 
 ## Usage
 
@@ -101,7 +117,7 @@ sre_history { "limit": 5 }
 - [x] MCP server (stdio JSON-RPC 2.0)
 - [x] `sre_analyze` — 5-stage agent pipeline (all agents live)
 - [x] `sre_history` — local JSON incident archive in `~/.froggy-sre/incidents/`
-- [ ] Route LLM calls to Froggy local daemon (no cloud, no API key needed)
+- [x] `LLMRouter` — Froggy local inference with Anthropic fallback
 - [ ] k8s context enrichment — pod logs and events via kubeconfig
 - [ ] Unix socket mode for standalone daemon usage
 

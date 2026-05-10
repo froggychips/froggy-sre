@@ -35,7 +35,7 @@ public struct RiskResult: Sendable, Codable { public let score: Double; public l
 // MARK: - Analyzer
 
 public actor Analyzer {
-    private let llm = AnthropicClient()
+    private let llm = LLMRouter()
     public init() {}
 
     public func run(_ incident: Incident) async throws -> Analysis {
@@ -58,7 +58,7 @@ public actor Analyzer {
 // MARK: - HypothesisAgent
 
 public actor HypothesisAgent {
-    private let llm = AnthropicClient()
+    private let llm = LLMRouter()
     public init() {}
 
     public func run(_ incident: Incident, _ analysis: Analysis) async throws -> Hypothesis {
@@ -78,31 +78,17 @@ public actor HypothesisAgent {
 // MARK: - CriticAgent
 
 public actor CriticAgent {
-    private let llm = AnthropicClient()
+    private let llm = LLMRouter()
     public init() {}
 
-    /// Enriches the critique with verified cluster facts before the LLM call.
-    /// Fetches unhealthy pods in `namespace` and compares against a healthy peer namespace.
-    public func run(
-        _ incident: Incident,
-        _ hypothesis: Hypothesis,
-        namespace: String? = nil
-    ) async throws -> Critique {
-        var factsSection = ""
-        if let ns = namespace {
-            let facts = await K8sFacts.collect(namespace: ns)
-            if !facts.isEmpty {
-                factsSection = "\n\nVerified cluster facts:\n\(facts)"
-            }
-        }
-
+    public func run(_ incident: Incident, _ hypothesis: Hypothesis) async throws -> Critique {
         let text = try await llm.complete(
-            system: "You are a skeptical SRE reviewer. Critically evaluate this root cause hypothesis against the verified cluster facts. State the blast radius explicitly (one pod / one namespace / wider). 2-3 sentences.",
+            system: "You are a skeptical SRE reviewer. Critically evaluate this root cause hypothesis. Identify weaknesses or missing context. 2-3 sentences.",
             user: """
             Incident: \(incident.labelString)
-            Hypothesis: \(hypothesis.rootCause)\(factsSection)
+            Hypothesis: \(hypothesis.rootCause)
 
-            Is this plausible? What is the blast radius? What might be wrong or missing?
+            Is this plausible? What might be wrong or missing?
             """
         )
         return Critique(validated: true, notes: text)
@@ -112,7 +98,7 @@ public actor CriticAgent {
 // MARK: - FixAgent
 
 public actor FixAgent {
-    private let llm = AnthropicClient()
+    private let llm = LLMRouter()
     public init() {}
 
     public func run(_ incident: Incident, _ critique: Critique) async throws -> Fix {
@@ -132,7 +118,7 @@ public actor FixAgent {
 // MARK: - RiskAgent
 
 public actor RiskAgent {
-    private let llm = AnthropicClient()
+    private let llm = LLMRouter()
     public init() {}
 
     public func run(_ incident: Incident, _ fix: Fix) async throws -> RiskResult {

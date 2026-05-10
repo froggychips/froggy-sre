@@ -10,8 +10,10 @@
 (что происходит, корневая причина, критика, фикс, оценка риска) одним вызовом `sre_analyze`.
 Всё сохраняется локально в `~/.froggy-sre/incidents/`.
 
-**Статус:** рабочий прототип. Не продукт. Для LLM-вызовов используется Anthropic API;
-роутинг на локальный инференс Froggy — в планах.
+LLM-вызовы роутируются через локальный демон Froggy (приватно, без API-ключа);
+если демон недоступен или модель не загружена — фоллбек на Anthropic API.
+
+**Статус:** рабочий прототип. Не продукт.
 
 💬 Контакт: [@froggychips](https://t.me/froggychips) в Telegram  
 📜 Лицензия: [MIT](LICENSE)
@@ -28,7 +30,10 @@
 | [sre-ai-copilot](https://github.com/froggychips/sre-ai-copilot) | Python K8s-бэкенд (облачный деплой) |
 
 ```
-Claude Code  ←—stdio / JSON-RPC—→  froggy-sre  ←—HTTPS—→  Anthropic API
+Claude Code  ←—stdio / JSON-RPC—→  froggy-sre
+                                      ↓ LLMRouter
+                              демон Froggy (локально, приватно)
+                              Anthropic API (фоллбек)
                                       ↓
                                ~/.froggy-sre/incidents/
 ```
@@ -51,11 +56,13 @@ sre_analyze
   → Risk         — оценка 0.0–1.0 + обоснование
 ```
 
+Каждый этап вызывает `LLMRouter`: сначала Froggy, при недоступности — Anthropic API.
+
 ## Требования
 
 - macOS 14+, Apple Silicon
 - Swift 6
-- переменная `ANTHROPIC_API_KEY`
+- демон [Froggy](https://github.com/froggychips/Froggy) **или** `ANTHROPIC_API_KEY` (достаточно одного)
 
 ## Сборка
 
@@ -78,9 +85,16 @@ swift build -c release
 }
 ```
 
-После перезапуска Claude Code инструменты `sre_analyze` и `sre_history` будут доступны в каждой сессии.
+`ANTHROPIC_API_KEY` не нужен, если демон Froggy запущен с загруженной моделью.
 
-Опционально: модель переопределяется через `FROGGY_SRE_MODEL` (по умолчанию: `claude-haiku-4-5-20251001`).
+## Переменные окружения
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Anthropic API-ключ (фоллбек) |
+| `FROGGY_IPC_SOCKET` | `~/Library/Application Support/Froggy/froggy.sock` | Путь к сокету демона |
+| `FROGGY_SRE_MODEL` | `claude-haiku-4-5-20251001` | Модель Anthropic для фоллбека |
+| `FROGGY_SRE_MAX_TOKENS` | `1024` | Максимум токенов на вызов |
 
 ## Примеры
 
@@ -101,7 +115,7 @@ sre_history { "limit": 5 }
 - [x] MCP-сервер (stdio JSON-RPC 2.0)
 - [x] `sre_analyze` — 5-этапный агентный пайплайн (все агенты работают)
 - [x] `sre_history` — локальный JSON-архив в `~/.froggy-sre/incidents/`
-- [ ] Роутинг LLM-вызовов в локальный демон Froggy (без облака, без API-ключа)
+- [x] `LLMRouter` — локальный инференс через Froggy, фоллбек на Anthropic
 - [ ] Обогащение k8s-контекстом — логи подов и евенты через kubeconfig
 - [ ] Режим демона через Unix-сокет
 
