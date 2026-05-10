@@ -81,14 +81,28 @@ public actor CriticAgent {
     private let llm = AnthropicClient()
     public init() {}
 
-    public func run(_ incident: Incident, _ hypothesis: Hypothesis) async throws -> Critique {
+    /// Enriches the critique with verified cluster facts before the LLM call.
+    /// Fetches unhealthy pods in `namespace` and compares against a healthy peer namespace.
+    public func run(
+        _ incident: Incident,
+        _ hypothesis: Hypothesis,
+        namespace: String? = nil
+    ) async throws -> Critique {
+        var factsSection = ""
+        if let ns = namespace {
+            let facts = await K8sFacts.collect(namespace: ns)
+            if !facts.isEmpty {
+                factsSection = "\n\nVerified cluster facts:\n\(facts)"
+            }
+        }
+
         let text = try await llm.complete(
-            system: "You are a skeptical SRE reviewer. Critically evaluate this root cause hypothesis. Identify weaknesses or missing context. 2-3 sentences.",
+            system: "You are a skeptical SRE reviewer. Critically evaluate this root cause hypothesis against the verified cluster facts. State the blast radius explicitly (one pod / one namespace / wider). 2-3 sentences.",
             user: """
             Incident: \(incident.labelString)
-            Hypothesis: \(hypothesis.rootCause)
+            Hypothesis: \(hypothesis.rootCause)\(factsSection)
 
-            Is this plausible? What might be wrong or missing?
+            Is this plausible? What is the blast radius? What might be wrong or missing?
             """
         )
         return Critique(validated: true, notes: text)
