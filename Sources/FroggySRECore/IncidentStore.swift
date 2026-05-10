@@ -6,8 +6,10 @@ public struct StoredIncident: Codable, Sendable {
 }
 
 /// Persists incident reports as JSON files under ~/.froggy-sre/incidents/.
+/// Prunes files older than `maxAgeDays` on every write (default 30, override via FROGGY_SRE_MAX_AGE_DAYS).
 public actor IncidentStore {
     private let directory: URL
+    private let maxAgeDays: Int
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
@@ -16,11 +18,13 @@ public actor IncidentStore {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir  = env["FROGGY_SRE_INCIDENTS_DIR"].map { URL(fileURLWithPath: $0) }
             ?? home.appendingPathComponent(".froggy-sre/incidents", isDirectory: true)
-        self.init(directory: dir)
+        let days = env["FROGGY_SRE_MAX_AGE_DAYS"].flatMap(Int.init) ?? 30
+        self.init(directory: dir, maxAgeDays: days)
     }
 
-    init(directory: URL) {
-        self.directory = directory
+    init(directory: URL, maxAgeDays: Int = 30) {
+        self.directory  = directory
+        self.maxAgeDays = maxAgeDays
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         encoder = JSONEncoder()
@@ -36,6 +40,7 @@ public actor IncidentStore {
         let data   = try encoder.encode(stored)
         let name   = filename(timestamp: stored.timestamp, labels: report.incident.labels)
         try data.write(to: directory.appendingPathComponent(name))
+        prune()
     }
 
     public func load(limit: Int = 10) throws -> [StoredIncident] {
@@ -59,6 +64,26 @@ public actor IncidentStore {
                 .filter { $0.report.incident.labels["alertname"] == alertname }
                 .prefix(limit)
         )
+    }
+
+    // MARK: - Private
+
+    /// Deletes JSON files whose creation date is older than maxAgeDays.
+    private func prune() {
+        let cutoff = Date().addingTimeInterval(-Double(maxAgeDays) * 86_400)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.creationDateKey],
+            options: .skipsHiddenFiles
+        ) else { return }
+        for file in files where file.pathExtension == "json" {
+            guard
+                let attrs   = try? file.resourceValues(forKeys: [.creationDateKey]),
+                let created = attrs.creationDate,
+                created < cutoff
+            else { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     private func filename(timestamp: Date, labels: [String: String]) -> String {
