@@ -2,13 +2,14 @@ import Foundation
 
 /// JSON-RPC 2.0 stdio MCP server.
 /// Follows the same transport pattern as froggy-mcp.
+///
+/// MCP mode: collects anamnesis (local model) → returns to Claude for reasoning.
+/// Daemon mode (SREDaemon): runs the full 5-agent pipeline autonomously.
 public actor MCPServer {
-    private let pipeline: AgentPipeline
     private let store: IncidentStore
 
     public init() {
-        pipeline = AgentPipeline()
-        store    = IncidentStore()
+        store = IncidentStore()
     }
 
     public func run() async {
@@ -57,6 +58,9 @@ public actor MCPServer {
     }
 
     // MARK: - sre_analyze
+    //
+    // Collects live k8s data + local-model anamnesis, then returns everything
+    // to Claude for reasoning. Claude IS the diagnosis layer in MCP mode.
 
     private func analyzeTool(args: [String: Any]) async -> [String: Any] {
         let incident = Incident(
@@ -64,13 +68,26 @@ public actor MCPServer {
             annotations: args["annotations"] as? [String: String] ?? [:],
             startsAt:    args["startsAt"]    as? String ?? ""
         )
-        do {
-            let report = try await pipeline.process(incident)
-            try? await store.save(report)
-            return textContent(format(report))
-        } catch {
-            return errorContent("analysis failed: \(error)")
-        }
+        let ctx      = await K8sContextFetcher().fetch(for: incident)
+        let enriched = ctx.isEmpty ? incident : Incident(
+            labels:      incident.labels,
+            annotations: incident.annotations,
+            startsAt:    incident.startsAt,
+            k8sContext:  ctx
+        )
+        let anamnesis = await AnamnesisCollector().collect(incident: enriched, context: ctx)
+
+        // Persist to history so sre_history can surface past similar cases.
+        let record = IncidentReport(
+            incident:   enriched,
+            analysis:   Analysis(summary: anamnesis),
+            hypothesis: Hypothesis(rootCause: "(pending — Claude)"),
+            fix:        Fix(action: "(pending — Claude)"),
+            risk:       RiskResult(score: -1, rationale: "(pending — Claude)")
+        )
+        try? await store.save(record)
+
+        return textContent(anamnesis)
     }
 
     // MARK: - sre_history
@@ -92,11 +109,16 @@ public actor MCPServer {
         [
             [
                 "name": "sre_analyze",
-                "description": "Analyze a Kubernetes incident through the 5-stage pipeline. Automatically fetches pod logs and k8s events via kubectl. Result is saved to incident history.",
+                "description": """
+                Fetch live Kubernetes context for an incident and return a structured anamnesis.
+                Automatically runs kubectl to collect pod logs, warning events, and pod description.
+                A local model extracts key facts (exit codes, error types, restart timing).
+                Returns all data for you to analyze — you are the diagnosis layer.
+                """,
                 "inputSchema": [
                     "type": "object",
                     "properties": [
-                        "labels":      ["type": "object", "description": "Alert labels (alertname, namespace, pod, severity, …)", "additionalProperties": ["type": "string"]],
+                        "labels":      ["type": "object", "description": "Alert labels. Include \"namespace\" and \"pod\" for kubectl enrichment.", "additionalProperties": ["type": "string"]],
                         "annotations": ["type": "object", "description": "Alert annotations (summary, description, runbook, …)", "additionalProperties": ["type": "string"]],
                         "startsAt":    ["type": "string",  "description": "ISO 8601 timestamp when the alert fired"]
                     ],
@@ -105,7 +127,7 @@ public actor MCPServer {
             ],
             [
                 "name": "sre_history",
-                "description": "Return recent incident analysis reports saved on this machine.",
+                "description": "Return recent incidents collected on this machine. Useful for spotting recurring patterns.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -118,45 +140,16 @@ public actor MCPServer {
 
     // MARK: - Formatting
 
-    private func format(_ r: IncidentReport) -> String {
-        var ctxNote = ""
-        if let ctx = r.incident.k8sContext, !ctx.isEmpty {
-            var sources: [String] = []
-            if ctx.podLogs        != nil { sources.append("pod logs") }
-            if ctx.recentEvents   != nil { sources.append("k8s events") }
-            if ctx.podDescription != nil { sources.append("pod description") }
-            ctxNote = "\n> Context fetched: \(sources.joined(separator: ", "))\n"
-        }
-        return """
-        ## SRE Incident Analysis
-        \(ctxNote)
-        ### What’s happening
-        \(r.analysis.summary)
-
-        ### Root cause hypothesis
-        \(r.hypothesis.rootCause)
-
-        ### Proposed fix
-        \(r.fix.action)
-
-        ### Risk
-        Score: \(String(format: "%.2f", r.risk.score))/1.0
-        \(r.risk.rationale)
-        """
-    }
-
     private func formatStored(index: Int, stored: StoredIncident) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm"
         let ts        = fmt.string(from: stored.timestamp)
         let alert     = stored.report.incident.labels["alertname"] ?? "unknown"
         let namespace = stored.report.incident.labels["namespace"].map { " (\($0))" } ?? ""
-        let score     = String(format: "%.2f", stored.report.risk.score)
         let hasCtx    = stored.report.incident.k8sContext.map { !$0.isEmpty } ?? false
         return """
-        \(index). \(ts) — \(alert)\(namespace) — Risk: \(score)\(hasCtx ? " [k8s ctx]" : "")
-           \(clip(stored.report.analysis.summary, 120))
-           Fix: \(clip(stored.report.fix.action, 100))
+        \(index). \(ts) — \(alert)\(namespace)\(hasCtx ? " [k8s ctx]" : "")
+           \(clip(stored.report.analysis.summary, 200))
         """
     }
 
