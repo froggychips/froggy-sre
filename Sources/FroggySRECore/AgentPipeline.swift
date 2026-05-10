@@ -2,8 +2,13 @@
 /// Enriches the incident with live k8s context before the first agent runs,
 /// then surfaces similar past incidents to inform the hypothesis stage.
 public actor AgentPipeline {
-    private let store = IncidentStore()
-    public init() {}
+    private let store: IncidentStore
+    private let llm: any LLMCompleting
+
+    public init(llm: any LLMCompleting = LLMRouter()) {
+        self.store = IncidentStore()
+        self.llm   = llm
+    }
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
         let ctx      = await K8sContextFetcher().fetch(for: incident)
@@ -14,12 +19,21 @@ public actor AgentPipeline {
             k8sContext:  ctx
         )
 
-        let analysis   = try await Analyzer().run(enriched)
+        let analysis = try await Analyzer(llm: llm).run(enriched)
+        try guardOutput(analysis.summary, stage: "Analyzer")
+
         let similar    = (try? await store.findSimilar(to: enriched)) ?? []
-        let hypothesis = try await HypothesisAgent().run(enriched, analysis, similarPast: similar)
-        let critique   = try await CriticAgent().run(enriched, hypothesis)
-        let fix        = try await FixAgent().run(enriched, critique)
-        let risk       = try await RiskAgent().run(enriched, fix)
+        let hypothesis = try await HypothesisAgent(llm: llm).run(enriched, analysis, similarPast: similar)
+        try guardOutput(hypothesis.rootCause, stage: "Hypothesis")
+
+        let critique = try await CriticAgent(llm: llm).run(enriched, hypothesis)
+        try guardOutput(critique.notes, stage: "Critic")
+
+        let fix = try await FixAgent(llm: llm).run(enriched, critique)
+        try guardOutput(fix.action, stage: "Fix")
+
+        let risk = try await RiskAgent(llm: llm).run(enriched, fix)
+
         return IncidentReport(
             incident:   enriched,
             analysis:   analysis,
@@ -28,4 +42,27 @@ public actor AgentPipeline {
             risk:       risk
         )
     }
+
+    // MARK: - Private
+
+    /// Throws if the stage output is too short or looks like an LLM refusal.
+    /// Catches truncated/empty responses and generic "I cannot help" replies
+    /// before they silently propagate as plausible context to the next stage.
+    private func guardOutput(_ text: String, stage: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 30 else {
+            throw PipelineStageError(stage: stage, reason: "output too short (\(trimmed.count) chars)")
+        }
+        let lower = trimmed.lowercased()
+        let refusals = ["i cannot", "i'm unable", "i don't have access", "as an ai,", "as an ai assistant"]
+        if refusals.contains(where: { lower.hasPrefix($0) }) {
+            throw PipelineStageError(stage: stage, reason: "LLM refused: \(String(trimmed.prefix(80)))")
+        }
+    }
+}
+
+public struct PipelineStageError: Error, LocalizedError, Sendable {
+    public let stage: String
+    public let reason: String
+    public var errorDescription: String? { "pipeline stage '\(stage)' failed: \(reason)" }
 }
