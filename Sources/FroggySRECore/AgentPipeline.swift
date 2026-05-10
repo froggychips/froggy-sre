@@ -4,9 +4,10 @@ public actor AgentPipeline {
     public init() {}
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
+        let namespace  = incident.labels["namespace"]
         let analysis   = try await Analyzer().run(incident)
         let hypothesis = try await HypothesisAgent().run(incident, analysis)
-        let critique   = try await CriticAgent().run(incident, hypothesis)
+        let critique   = try await CriticAgent().run(incident, hypothesis, namespace: namespace)
         let fix        = try await FixAgent().run(incident, critique)
         let risk       = try await RiskAgent().run(incident, fix)
         return IncidentReport(
