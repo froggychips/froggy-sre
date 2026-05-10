@@ -21,7 +21,7 @@ import Foundation
         startsAt: "2026-01-01T00:00:00Z",
         k8sContext: K8sContext(podLogs: "log line", recentEvents: nil, podDescription: nil)
     )
-    let data = try JSONEncoder().encode(incident)
+    let data    = try JSONEncoder().encode(incident)
     let decoded = try JSONDecoder().decode(Incident.self, from: data)
     #expect(decoded.labels == incident.labels)
     #expect(decoded.annotations == incident.annotations)
@@ -32,14 +32,13 @@ import Foundation
 // MARK: - K8sContext
 
 @Test func k8sContext_isEmpty_allNil() {
-    let ctx = K8sContext(podLogs: nil, recentEvents: nil, podDescription: nil)
-    #expect(ctx.isEmpty)
+    #expect(K8sContext(podLogs: nil, recentEvents: nil, podDescription: nil).isEmpty)
 }
 
 @Test func k8sContext_isEmpty_falseWhenAnySet() {
-    #expect(!K8sContext(podLogs: "x", recentEvents: nil, podDescription: nil).isEmpty)
-    #expect(!K8sContext(podLogs: nil, recentEvents: "x", podDescription: nil).isEmpty)
-    #expect(!K8sContext(podLogs: nil, recentEvents: nil, podDescription: "x").isEmpty)
+    #expect(!K8sContext(podLogs: "x",  recentEvents: nil, podDescription: nil).isEmpty)
+    #expect(!K8sContext(podLogs: nil,  recentEvents: "x", podDescription: nil).isEmpty)
+    #expect(!K8sContext(podLogs: nil,  recentEvents: nil, podDescription: "x").isEmpty)
 }
 
 // MARK: - RiskResult
@@ -51,8 +50,8 @@ import Foundation
 }
 
 @Test func riskResult_codableRoundTrip() throws {
-    let r = RiskResult(score: 0.3, rationale: "low risk")
-    let data = try JSONEncoder().encode(r)
+    let r       = RiskResult(score: 0.3, rationale: "low risk")
+    let data    = try JSONEncoder().encode(r)
     let decoded = try JSONDecoder().decode(RiskResult.self, from: data)
     #expect(decoded.score == r.score)
     #expect(decoded.rationale == r.rationale)
@@ -80,55 +79,54 @@ import Foundation
 
 // MARK: - IncidentStore
 
-@Test func incidentStore_saveLoad_roundTrip() throws {
-    // Override default directory via env var so we don't pollute ~/.froggy-sre
-    let tmp = FileManager.default.temporaryDirectory
-        .appendingPathComponent("froggy-sre-tests-\(Int(Date().timeIntervalSince1970))")
-    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: tmp) }
+private func tmpStore() throws -> (IncidentStore, URL) {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("froggy-sre-tests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return (IncidentStore(directory: dir), dir)
+}
 
-    setenv("FROGGY_SRE_INCIDENTS_DIR", tmp.path, 1)
-    defer { unsetenv("FROGGY_SRE_INCIDENTS_DIR") }
-
-    let store = IncidentStore()
-    let report = IncidentReport(
-        incident:   Incident(labels: ["alertname": "TestAlert"], annotations: [:], startsAt: "2026-01-01T00:00:00Z"),
-        analysis:   Analysis(summary: "test"),
-        hypothesis: Hypothesis(rootCause: "test cause"),
-        fix:        Fix(action: "test fix"),
-        risk:       RiskResult(score: 0.5, rationale: "test")
+private func makeReport(alertname: String) -> IncidentReport {
+    IncidentReport(
+        incident:   Incident(labels: ["alertname": alertname], annotations: [:], startsAt: "2026-01-01T00:00:00Z"),
+        analysis:   Analysis(summary: "s"),
+        hypothesis: Hypothesis(rootCause: "r"),
+        fix:        Fix(action: "f"),
+        risk:       RiskResult(score: 0.1, rationale: "r")
     )
-    try await store.save(report)
+}
+
+@Test func incidentStore_saveLoad_roundTrip() async throws {
+    let (store, dir) = try tmpStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    try await store.save(makeReport(alertname: "TestAlert"))
     let loaded = try await store.load(limit: 10)
     #expect(loaded.count == 1)
     #expect(loaded[0].report.incident.labels["alertname"] == "TestAlert")
 }
 
-@Test func incidentStore_findSimilar_filtersByAlertname() throws {
-    let tmp = FileManager.default.temporaryDirectory
-        .appendingPathComponent("froggy-sre-tests-\(Int(Date().timeIntervalSince1970))")
-    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: tmp) }
+@Test func incidentStore_findSimilar_filtersByAlertname() async throws {
+    let (store, dir) = try tmpStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
 
-    setenv("FROGGY_SRE_INCIDENTS_DIR", tmp.path, 1)
-    defer { unsetenv("FROGGY_SRE_INCIDENTS_DIR") }
+    try await store.save(makeReport(alertname: "PodCrashLooping"))
+    try await store.save(makeReport(alertname: "PodCrashLooping"))
+    try await store.save(makeReport(alertname: "HighMemory"))
 
-    let store = IncidentStore()
-    let makeReport = { (alertname: String) in
-        IncidentReport(
-            incident:   Incident(labels: ["alertname": alertname], annotations: [:], startsAt: "2026-01-01T00:00:00Z"),
-            analysis:   Analysis(summary: "s"),
-            hypothesis: Hypothesis(rootCause: "r"),
-            fix:        Fix(action: "f"),
-            risk:       RiskResult(score: 0.1, rationale: "r")
-        )
-    }
-    try await store.save(makeReport("PodCrashLooping"))
-    try await store.save(makeReport("PodCrashLooping"))
-    try await store.save(makeReport("HighMemory"))
-
-    let target = Incident(labels: ["alertname": "PodCrashLooping"], annotations: [:], startsAt: "now")
+    let target  = Incident(labels: ["alertname": "PodCrashLooping"], annotations: [:], startsAt: "now")
     let similar = try await store.findSimilar(to: target)
     #expect(similar.count == 2)
     #expect(similar.allSatisfy { $0.report.incident.labels["alertname"] == "PodCrashLooping" })
+}
+
+@Test func incidentStore_findSimilar_respectsLimit() async throws {
+    let (store, dir) = try tmpStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    for _ in 0..<5 { try await store.save(makeReport(alertname: "Flood")) }
+
+    let target  = Incident(labels: ["alertname": "Flood"], annotations: [:], startsAt: "now")
+    let similar = try await store.findSimilar(to: target, limit: 2)
+    #expect(similar.count == 2)
 }

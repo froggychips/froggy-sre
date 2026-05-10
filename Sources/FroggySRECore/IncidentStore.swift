@@ -12,8 +12,15 @@ public actor IncidentStore {
     private let decoder: JSONDecoder
 
     public init() {
+        let env  = ProcessInfo.processInfo.environment
         let home = FileManager.default.homeDirectoryForCurrentUser
-        directory = home.appendingPathComponent(".froggy-sre/incidents", isDirectory: true)
+        let dir  = env["FROGGY_SRE_INCIDENTS_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? home.appendingPathComponent(".froggy-sre/incidents", isDirectory: true)
+        self.init(directory: dir)
+    }
+
+    init(directory: URL) {
+        self.directory = directory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         encoder = JSONEncoder()
@@ -26,8 +33,8 @@ public actor IncidentStore {
 
     public func save(_ report: IncidentReport) throws {
         let stored = StoredIncident(timestamp: Date(), report: report)
-        let data = try encoder.encode(stored)
-        let name = filename(timestamp: stored.timestamp, labels: report.incident.labels)
+        let data   = try encoder.encode(stored)
+        let name   = filename(timestamp: stored.timestamp, labels: report.incident.labels)
         try data.write(to: directory.appendingPathComponent(name))
     }
 
@@ -57,7 +64,7 @@ public actor IncidentStore {
     private func filename(timestamp: Date, labels: [String: String]) -> String {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime]
-        let ts = fmt.string(from: timestamp).replacingOccurrences(of: ":", with: "-")
+        let ts    = fmt.string(from: timestamp).replacingOccurrences(of: ":", with: "-")
         let alert = (labels["alertname"] ?? "unknown")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
         return "\(ts)-\(alert).json"
