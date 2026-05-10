@@ -255,6 +255,113 @@ private func crashLoopIncident() -> Incident {
     }
 }
 
+// MARK: - EvalRunner
+
+private func evalIncident() -> Incident {
+    Incident(
+        labels: ["alertname": "OOMKilled", "namespace": "squad-1-payments", "pod": "api-7f9b"],
+        annotations: ["summary": "Container OOMKilled, exit code 137"],
+        startsAt: "2026-01-01T00:00:00Z",
+        k8sContext: K8sContext(
+            podLogs: "FATAL: OOMKilled exit code 137 squad-1-payments api-7f9b",
+            recentEvents: nil,
+            podDescription: nil
+        )
+    )
+}
+
+@Test func evalRunner_rubric_passesWhenKeywordsPresent() async throws {
+    let response = "Root cause: OOMKilled. Fix: kubectl rollout restart deployment/api in squad-1-payments. Risk: LOW."
+    let mock     = MockLLM(response: response)
+    let pipeline = AgentPipeline(llm: mock)
+    let runner   = EvalRunner()
+    let evalCase = EvalCase(
+        name: "oom-test",
+        incident: evalIncident(),
+        rubric: EvalRubric(
+            expectedRootCause: "OOMKilled",
+            mustMention: ["kubectl rollout restart"],
+            mustNotMention: ["network timeout"]
+        )
+    )
+    let result = try await runner.run(evalCase: evalCase, pipeline: pipeline)
+    #expect(result.passed)
+    #expect(result.rubric?.rootCauseMatch == true)
+    #expect(result.rubric?.mustMentionHits["kubectl rollout restart"] == true)
+    #expect(result.rubric?.mustNotMentionHits["network timeout"] == false)
+}
+
+@Test func evalRunner_rubric_failsWhenMustMentionMissing() async throws {
+    let mock     = MockLLM(response: "Root cause: OOMKilled. Fix: increase memory limit. Risk: LOW.")
+    let pipeline = AgentPipeline(llm: mock)
+    let runner   = EvalRunner()
+    let evalCase = EvalCase(
+        name: "oom-missing",
+        incident: evalIncident(),
+        rubric: EvalRubric(mustMention: ["kubectl rollout restart"])
+    )
+    let result = try await runner.run(evalCase: evalCase, pipeline: pipeline)
+    #expect(!result.passed)
+    #expect(result.rubric?.mustMentionHits["kubectl rollout restart"] == false)
+}
+
+@Test func evalRunner_rubric_failsOnFalsePositive() async throws {
+    let mock     = MockLLM(response: "Root cause: network timeout caused OOM. Fix: check connectivity.")
+    let pipeline = AgentPipeline(llm: mock)
+    let runner   = EvalRunner()
+    let evalCase = EvalCase(
+        name: "false-positive",
+        incident: evalIncident(),
+        rubric: EvalRubric(mustNotMention: ["network timeout"])
+    )
+    let result = try await runner.run(evalCase: evalCase, pipeline: pipeline)
+    #expect(!result.passed)
+    #expect(result.rubric?.mustNotMentionHits["network timeout"] == true)
+}
+
+@Test func evalRunner_hallucinationScore_highWhenGrounded() {
+    let incident = evalIncident()  // k8sContext contains "api-7f9b", "squad-1-payments", "137"
+    let report = IncidentReport(
+        incident:   incident,
+        analysis:   Analysis(summary: "Pod api-7f9b in squad-1-payments OOMKilled exit code 137"),
+        hypothesis: Hypothesis(rootCause: "OOMKilled memory limit exceeded"),
+        critique:   nil,
+        fix:        Fix(action: "Increase memory limit for squad-1-payments"),
+        risk:       RiskResult(score: 0.3, rationale: "Safe rollout restart")
+    )
+    let score = EvalRunner.hallucinationScore(report: report, incident: incident)
+    #expect(score > 0.5)
+}
+
+@Test func evalRunner_hallucinationScore_lowWhenInvented() {
+    let incident = evalIncident()
+    let report = IncidentReport(
+        incident:   incident,
+        analysis:   Analysis(summary: "Pod xyz-phantom-9999 in prod-cluster-eu OOMKilled"),
+        hypothesis: Hypothesis(rootCause: "Redis-cluster-abc123 connection refused port 6379"),
+        critique:   nil,
+        fix:        Fix(action: "Restart deployment phantom-worker-v2 in us-east-1"),
+        risk:       RiskResult(score: 0.8, rationale: "High risk")
+    )
+    let score = EvalRunner.hallucinationScore(report: report, incident: incident)
+    // Score may be -1 (no context) or low — either is not "high"
+    #expect(score < 0.5 || score == -1)
+}
+
+@Test func evalRunner_hallucinationScore_naWhenNoContext() {
+    let incident = Incident(labels: ["alertname": "Test"], annotations: [:], startsAt: "2026-01-01T00:00:00Z")
+    let report = IncidentReport(
+        incident:   incident,
+        analysis:   Analysis(summary: "Something happened"),
+        hypothesis: Hypothesis(rootCause: "Unknown"),
+        critique:   nil,
+        fix:        Fix(action: "Check logs"),
+        risk:       RiskResult(score: 0.5, rationale: "Medium")
+    )
+    let score = EvalRunner.hallucinationScore(report: report, incident: incident)
+    #expect(score == -1)
+}
+
 // MARK: - AnthropicClient retry
 
 /// URLProtocol stub: replays a pre-configured sequence of (statusCode, body) pairs.
