@@ -54,14 +54,14 @@ public actor Analyzer {
             if let evts = k.recentEvents { ctx += "\nRecent k8s warning events:\n```\n\(evts)\n```" }
         }
         let text = try await llm.complete(
-            system: "You are a senior SRE analyzing a Kubernetes alert. Be concise and technical. 2-3 sentences.",
+            system: "You are a senior SRE analyzing a Kubernetes alert. Be concise and technical. 2-3 sentences. Focus on the LAST error in the logs — that is the crash cause, not earlier warnings.",
             user: """
             Alert: \(incident.labelString)
             \(annotations.isEmpty ? "" : "Annotations:\n\(annotations)")
             \(ctx)
             Started: \(incident.startsAt)
 
-            What is happening and what is the immediate impact?
+            What is happening and what is the immediate impact? Identify the final error before crash.
             """
         )
         return Analysis(summary: text)
@@ -96,14 +96,14 @@ public actor HypothesisAgent {
             historyCtx = "\nPast similar incidents (most recent first):\n" + lines.joined(separator: "\n")
         }
         let text = try await llm.complete(
-            system: "You are an SRE investigating a Kubernetes incident. Generate a specific root cause hypothesis. Technical, 2-3 sentences.",
+            system: "You are an SRE investigating a Kubernetes incident. Generate a specific root cause hypothesis. Technical, 2-3 sentences. /no_think",
             user: """
             Incident: \(incident.labelString)
             Analysis: \(analysis.summary)
             \(ctx)
             \(historyCtx)
 
-            What is the most likely root cause?
+            What is the most likely root cause? Be specific: name exact error types, class names, and files if visible in logs.
             """
         )
         return Hypothesis(rootCause: text)

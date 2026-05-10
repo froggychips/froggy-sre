@@ -21,7 +21,15 @@ public struct K8sContextFetcher: Sendable {
         guard !ns.isEmpty else { return K8sContext(podLogs: nil, recentEvents: nil, podDescription: nil) }
 
         let hasPod = !pod.isEmpty
-        let logs   = hasPod ? await kubectl(["logs", pod, "-n", ns, "--tail=80", "--all-containers", "--ignore-errors"]) : nil
+        // Fetch current + previous container logs: crash evidence lives in --previous when pod is in CrashLoopBackOff.
+        let logsNow  = hasPod ? await kubectl(["logs", pod, "-n", ns, "--tail=60", "--all-containers", "--ignore-errors"]) : nil
+        let logsPrev = hasPod ? await kubectl(["logs", pod, "-n", ns, "--tail=40", "--previous", "--ignore-errors"]) : nil
+        let logs: String? = switch (logsNow, logsPrev) {
+            case (let a?, let b?): "=== current ===\n\(a)\n=== previous (crashed) ===\n\(b)"
+            case (let a?, nil):    a
+            case (nil, let b?):    "=== previous (crashed) ===\n\(b)"
+            case (nil, nil):       nil
+        }
         let events = await kubectl(["get", "events", "-n", ns, "--sort-by=.lastTimestamp", "--field-selector=type=Warning"])
         let rawDesc = hasPod ? await kubectl(["describe", "pod", pod, "-n", ns]) : nil
         return K8sContext(
