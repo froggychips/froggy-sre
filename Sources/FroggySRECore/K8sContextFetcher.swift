@@ -53,7 +53,10 @@ public struct K8sContextFetcher: Sendable {
                 let out = Pipe()
                 proc.standardOutput = out
                 proc.standardError  = Pipe()
-                guard (try? proc.run()) != nil else { continuation.resume(returning: nil); return }
+                guard (try? proc.run()) != nil else {
+                    fputs("[froggy-sre] warning: kubectl not found — k8s context unavailable (set KUBECTL_PATH to override)\n", stderr)
+                    continuation.resume(returning: nil); return
+                }
                 proc.waitUntilExit()
                 let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
