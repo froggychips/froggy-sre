@@ -77,13 +77,13 @@ import Foundation
     #expect(report.risk.score == 0.2)
 }
 
-// MARK: - IncidentStore
+// MARK: - IncidentStore helpers
 
-private func tmpStore() throws -> (IncidentStore, URL) {
+private func tmpStore(maxAgeDays: Int = 30) throws -> (IncidentStore, URL) {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("froggy-sre-tests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return (IncidentStore(directory: dir), dir)
+    return (IncidentStore(directory: dir, maxAgeDays: maxAgeDays), dir)
 }
 
 private func makeReport(alertname: String) -> IncidentReport {
@@ -95,6 +95,8 @@ private func makeReport(alertname: String) -> IncidentReport {
         risk:       RiskResult(score: 0.1, rationale: "r")
     )
 }
+
+// MARK: - IncidentStore
 
 @Test func incidentStore_saveLoad_roundTrip() async throws {
     let (store, dir) = try tmpStore()
@@ -129,4 +131,51 @@ private func makeReport(alertname: String) -> IncidentReport {
     let target  = Incident(labels: ["alertname": "Flood"], annotations: [:], startsAt: "now")
     let similar = try await store.findSimilar(to: target, limit: 2)
     #expect(similar.count == 2)
+}
+
+@Test func incidentStore_prune_removesOldFiles() async throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("froggy-sre-prune-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Write a JSON file with creation date 40 days ago
+    let oldFile = dir.appendingPathComponent("old-incident.json")
+    try "{}".write(to: oldFile, atomically: true, encoding: .utf8)
+    let pastDate = Date().addingTimeInterval(-40 * 86_400)
+    try (oldFile as NSURL).setResourceValue(pastDate, forKey: .creationDateKey)
+
+    // Store with maxAgeDays=30 — saving any report should trigger prune
+    let store = IncidentStore(directory: dir, maxAgeDays: 30)
+    try await store.save(makeReport(alertname: "Trigger"))
+
+    let remaining = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    #expect(!remaining.contains("old-incident.json"), "old file should have been pruned")
+    #expect(remaining.count == 1, "only the new incident file should remain")
+}
+
+// MARK: - K8sFacts.peerNamespace
+
+@Test func peerNamespace_squadOne_returnSquadTwo() {
+    #expect(K8sFacts.peerNamespace("squad-1-kingdom2") == "squad-2-kingdom2")
+}
+
+@Test func peerNamespace_squadTwo_returnsSquadThree() {
+    #expect(K8sFacts.peerNamespace("squad-2-shared") == "squad-3-shared")
+}
+
+@Test func peerNamespace_squadThree_returnsSquadTwo() {
+    #expect(K8sFacts.peerNamespace("squad-3-auth") == "squad-2-auth")
+}
+
+@Test func peerNamespace_nonSquad_returnsNil() {
+    #expect(K8sFacts.peerNamespace("prod")        == nil)
+    #expect(K8sFacts.peerNamespace("preprod")     == nil)
+    #expect(K8sFacts.peerNamespace("kube-system") == nil)
+    #expect(K8sFacts.peerNamespace("mcp")         == nil)
+}
+
+@Test func peerNamespace_squadNoSuffix_returnsNil() {
+    // "squad-1" has no trailing "-suffix" so should not match
+    #expect(K8sFacts.peerNamespace("squad-1") == nil)
 }
