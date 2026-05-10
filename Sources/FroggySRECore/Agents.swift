@@ -42,8 +42,8 @@ public struct RiskResult: Sendable, Codable { public let score: Double; public l
 // MARK: - Analyzer
 
 public actor Analyzer {
-    private let llm = LLMRouter()
-    public init() {}
+    private let llm: any LLMCompleting
+    public init(llm: any LLMCompleting = LLMRouter()) { self.llm = llm }
 
     public func run(_ incident: Incident) async throws -> Analysis {
         let annotations = incident.annotations.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
@@ -70,8 +70,8 @@ public actor Analyzer {
 // MARK: - HypothesisAgent
 
 public actor HypothesisAgent {
-    private let llm = LLMRouter()
-    public init() {}
+    private let llm: any LLMCompleting
+    public init(llm: any LLMCompleting = LLMRouter()) { self.llm = llm }
 
     public func run(
         _ incident: Incident,
@@ -112,8 +112,8 @@ public actor HypothesisAgent {
 // MARK: - CriticAgent
 
 public actor CriticAgent {
-    private let llm = LLMRouter()
-    public init() {}
+    private let llm: any LLMCompleting
+    public init(llm: any LLMCompleting = LLMRouter()) { self.llm = llm }
 
     public func run(_ incident: Incident, _ hypothesis: Hypothesis) async throws -> Critique {
         let text = try await llm.complete(
@@ -132,8 +132,8 @@ public actor CriticAgent {
 // MARK: - FixAgent
 
 public actor FixAgent {
-    private let llm = LLMRouter()
-    public init() {}
+    private let llm: any LLMCompleting
+    public init(llm: any LLMCompleting = LLMRouter()) { self.llm = llm }
 
     public func run(_ incident: Incident, _ critique: Critique) async throws -> Fix {
         var ctx = ""
@@ -157,8 +157,8 @@ public actor FixAgent {
 // MARK: - RiskAgent
 
 public actor RiskAgent {
-    private let llm = LLMRouter()
-    public init() {}
+    private let llm: any LLMCompleting
+    public init(llm: any LLMCompleting = LLMRouter()) { self.llm = llm }
 
     public func run(_ incident: Incident, _ fix: Fix) async throws -> RiskResult {
         let text = try await llm.complete(
