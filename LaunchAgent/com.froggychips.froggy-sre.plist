@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.froggychips.froggy-sre</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/froggy-sre</string>
+        <string>--daemon</string>
+    </array>
+
+    <!-- Restart automatically if the daemon exits -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Start on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/froggy-sre.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/froggy-sre-error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Unix socket path for incoming incident requests -->
+        <key>FROGGY_SRE_SOCKET</key>
+        <string>/tmp/froggy-sre.sock</string>
+        <!-- Add ANTHROPIC_API_KEY here if Froggy daemon is not running -->
+        <!-- <key>ANTHROPIC_API_KEY</key> -->
+        <!-- <string>sk-ant-...</string> -->
+    </dict>
+</dict>
+</plist>
