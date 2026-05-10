@@ -14,10 +14,10 @@ public struct Incident: Sendable, Codable {
         startsAt: String,
         k8sContext: K8sContext? = nil
     ) {
-        self.labels     = labels
+        self.labels      = labels
         self.annotations = annotations
-        self.startsAt   = startsAt
-        self.k8sContext = k8sContext
+        self.startsAt    = startsAt
+        self.k8sContext  = k8sContext
     }
 
     var labelString: String {
@@ -49,7 +49,7 @@ public actor Analyzer {
         let annotations = incident.annotations.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
         var ctx = ""
         if let k = incident.k8sContext {
-            if let logs = k.podLogs   { ctx += "\nPod logs (tail):\n```\n\(logs)\n```" }
+            if let logs = k.podLogs      { ctx += "\nPod logs (tail):\n```\n\(logs)\n```" }
             if let evts = k.recentEvents { ctx += "\nRecent k8s warning events:\n```\n\(evts)\n```" }
         }
         let text = try await llm.complete(
@@ -73,10 +73,26 @@ public actor HypothesisAgent {
     private let llm = LLMRouter()
     public init() {}
 
-    public func run(_ incident: Incident, _ analysis: Analysis) async throws -> Hypothesis {
+    public func run(
+        _ incident: Incident,
+        _ analysis: Analysis,
+        similarPast: [StoredIncident] = []
+    ) async throws -> Hypothesis {
         var ctx = ""
         if let desc = incident.k8sContext?.podDescription {
             ctx = "\nPod description:\n```\n\(desc)\n```"
+        }
+        var historyCtx = ""
+        if !similarPast.isEmpty {
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withInternetDateTime]
+            let lines = similarPast.map { past -> String in
+                let ts    = String(fmt.string(from: past.timestamp).prefix(16))
+                let cause = String(past.report.hypothesis.rootCause.prefix(200))
+                let fix   = String(past.report.fix.action.prefix(150))
+                return "\u{2022} \(ts) → \(cause) | Fix applied: \(fix)"
+            }
+            historyCtx = "\nPast similar incidents (most recent first):\n" + lines.joined(separator: "\n")
         }
         let text = try await llm.complete(
             system: "You are an SRE investigating a Kubernetes incident. Generate a specific root cause hypothesis. Technical, 2-3 sentences.",
@@ -84,6 +100,7 @@ public actor HypothesisAgent {
             Incident: \(incident.labelString)
             Analysis: \(analysis.summary)
             \(ctx)
+            \(historyCtx)
 
             What is the most likely root cause?
             """

@@ -1,6 +1,8 @@
 /// Five-stage incident analysis pipeline.
-/// Enriches the incident with live k8s context before the first agent runs.
+/// Enriches the incident with live k8s context before the first agent runs,
+/// then surfaces similar past incidents to inform the hypothesis stage.
 public actor AgentPipeline {
+    private let store = IncidentStore()
     public init() {}
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
@@ -13,7 +15,8 @@ public actor AgentPipeline {
         )
 
         let analysis   = try await Analyzer().run(enriched)
-        let hypothesis = try await HypothesisAgent().run(enriched, analysis)
+        let similar    = (try? await store.findSimilar(to: enriched)) ?? []
+        let hypothesis = try await HypothesisAgent().run(enriched, analysis, similarPast: similar)
         let critique   = try await CriticAgent().run(enriched, hypothesis)
         let fix        = try await FixAgent().run(enriched, critique)
         let risk       = try await RiskAgent().run(enriched, fix)

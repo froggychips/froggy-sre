@@ -39,9 +39,19 @@ public actor IncidentStore {
         )
         return files
             .filter { $0.pathExtension == "json" }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent } // ISO8601 lexsort = chrono
+            .sorted { $0.lastPathComponent > $1.lastPathComponent } // ISO8601 lexsort = chrono desc
             .prefix(limit)
             .compactMap { try? decoder.decode(StoredIncident.self, from: Data(contentsOf: $0)) }
+    }
+
+    /// Returns the N most recent stored incidents with the same alertname.
+    public func findSimilar(to incident: Incident, limit: Int = 3) throws -> [StoredIncident] {
+        let alertname = incident.labels["alertname"] ?? ""
+        return Array(
+            try load(limit: 50)
+                .filter { $0.report.incident.labels["alertname"] == alertname }
+                .prefix(limit)
+        )
     }
 
     private func filename(timestamp: Date, labels: [String: String]) -> String {
