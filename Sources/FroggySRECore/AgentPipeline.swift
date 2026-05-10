@@ -1,17 +1,30 @@
+import Foundation
+
+/// Called after each pipeline stage with stage name, elapsed time, and first 300 chars of output.
+public typealias StageProgressHandler = @Sendable (_ stage: String, _ duration: Duration, _ output: String) async -> Void
+
 /// Пятиэтапный пайплайн анализа инцидентов.
 /// Обогащает инцидент живым k8s-контекстом перед первым агентом,
 /// затем передаёт похожие прошлые инциденты в Hypothesis-агент.
 public actor AgentPipeline {
     private let store: IncidentStore
     private let llm: any LLMCompleting
+    private let onStage: StageProgressHandler?
 
-    public init(llm: any LLMCompleting = LLMRouter(), store: IncidentStore = IncidentStore()) {
-        self.llm   = llm
-        self.store = store
+    public init(llm: any LLMCompleting = LLMRouter(), store: IncidentStore = IncidentStore(), onStage: StageProgressHandler? = nil) {
+        self.llm     = llm
+        self.store   = store
+        self.onStage = onStage
     }
 
     public func process(_ incident: Incident) async throws -> IncidentReport {
-        let ctx      = await K8sContextFetcher().fetch(for: incident)
+        // Skip live fetch when context is already embedded (bench / frozen snapshot mode).
+        let ctx: K8sContext
+        if let existing = incident.k8sContext, !existing.isEmpty {
+            ctx = existing
+        } else {
+            ctx = await K8sContextFetcher().fetch(for: incident)
+        }
         let enriched = ctx.isEmpty ? incident : Incident(
             labels:      incident.labels,
             annotations: incident.annotations,
@@ -19,25 +32,38 @@ public actor AgentPipeline {
             k8sContext:  ctx
         )
 
+        let clock = ContinuousClock()
+        var t = clock.now
+
         let analysis = try await Analyzer(llm: llm).run(enriched)
         try guardOutput(analysis.summary, stage: "Analyzer")
+        await emit("analyzer", clock.now - t, analysis.summary)
+        t = clock.now
 
         let similar    = (try? await store.findSimilar(to: enriched)) ?? []
         let hypothesis = try await HypothesisAgent(llm: llm).run(enriched, analysis, similarPast: similar)
         try guardOutput(hypothesis.rootCause, stage: "Hypothesis")
+        await emit("hypothesis", clock.now - t, hypothesis.rootCause)
+        t = clock.now
 
         let critique = try await CriticAgent(llm: llm).run(enriched, hypothesis)
         try guardOutput(critique.notes, stage: "Critic")
+        await emit("critic", clock.now - t, critique.notes)
+        t = clock.now
 
         let fix = try await FixAgent(llm: llm).run(enriched, critique)
         try guardOutput(fix.action, stage: "Fix")
+        await emit("fix", clock.now - t, fix.action)
+        t = clock.now
 
         let risk = try await RiskAgent(llm: llm).run(enriched, fix)
+        await emit("risk", clock.now - t, risk.rationale)
 
         let report = IncidentReport(
             incident:   enriched,
             analysis:   analysis,
             hypothesis: hypothesis,
+            critique:   critique,
             fix:        fix,
             risk:       risk
         )
@@ -57,6 +83,11 @@ public actor AgentPipeline {
         if refusals.contains(where: { lower.hasPrefix($0) }) {
             throw PipelineStageError(stage: stage, reason: "LLM refused: \(String(trimmed.prefix(80)))")
         }
+    }
+
+    private func emit(_ stage: String, _ duration: Duration, _ output: String) async {
+        guard let h = onStage else { return }
+        await h(stage, duration, String(output.prefix(300)))
     }
 }
 

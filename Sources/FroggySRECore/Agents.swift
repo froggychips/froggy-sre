@@ -29,6 +29,7 @@ public struct IncidentReport: Sendable, Codable {
     public let incident: Incident
     public let analysis: Analysis
     public let hypothesis: Hypothesis
+    public let critique: Critique?
     public let fix: Fix
     public let risk: RiskResult
 }
@@ -125,7 +126,7 @@ public actor CriticAgent {
             Is this plausible? What might be wrong or missing?
             """
         )
-        return Critique(validated: true, notes: text)
+        return Critique(validated: !text.lowercased().contains("implausible"), notes: text)
     }
 }
 

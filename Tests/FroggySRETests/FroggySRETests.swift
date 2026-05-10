@@ -81,6 +81,7 @@ struct FailingLLM: LLMCompleting {
         incident:   incident,
         analysis:   Analysis(summary: "high restart rate"),
         hypothesis: Hypothesis(rootCause: "OOM in init container"),
+        critique:   nil,
         fix:        Fix(action: "kubectl rollout restart"),
         risk:       RiskResult(score: 0.2, rationale: "safe rollout")
     )
@@ -103,6 +104,7 @@ private func makeReport(alertname: String) -> IncidentReport {
         incident:   Incident(labels: ["alertname": alertname], annotations: [:], startsAt: "2026-01-01T00:00:00Z"),
         analysis:   Analysis(summary: "s"),
         hypothesis: Hypothesis(rootCause: "r"),
+        critique:   nil,
         fix:        Fix(action: "f"),
         risk:       RiskResult(score: 0.1, rationale: "r")
     )

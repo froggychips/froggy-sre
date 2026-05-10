@@ -88,7 +88,7 @@ public actor IncidentStore {
 
     private func filename(timestamp: Date, labels: [String: String]) -> String {
         let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime]
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let ts    = fmt.string(from: timestamp).replacingOccurrences(of: ":", with: "-")
         let alert = (labels["alertname"] ?? "unknown")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
