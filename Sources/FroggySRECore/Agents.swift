@@ -32,6 +32,25 @@ public struct IncidentReport: Sendable, Codable {
     public let critique: Critique?
     public let fix: Fix
     public let risk: RiskResult
+    public let trace: [StageTrace]?
+
+    public init(
+        incident: Incident,
+        analysis: Analysis,
+        hypothesis: Hypothesis,
+        critique: Critique?,
+        fix: Fix,
+        risk: RiskResult,
+        trace: [StageTrace]? = nil
+    ) {
+        self.incident = incident
+        self.analysis = analysis
+        self.hypothesis = hypothesis
+        self.critique = critique
+        self.fix = fix
+        self.risk = risk
+        self.trace = trace
+    }
 }
 
 public struct Analysis: Sendable, Codable   { public let summary: String }

@@ -32,32 +32,42 @@ public actor AgentPipeline {
             k8sContext:  ctx
         )
 
-        let clock = ContinuousClock()
-        var t = clock.now
+        var traces: [StageTrace] = []
 
-        let analysis = try await Analyzer(llm: llm).run(enriched)
+        let (analysis, analysisTrace) = try await runStage("analyzer") {
+            try await Analyzer(llm: llm).run(enriched)
+        }
         try guardOutput(analysis.summary, stage: "Analyzer")
-        await emit("analyzer", clock.now - t, analysis.summary)
-        t = clock.now
+        await emit("analyzer", .milliseconds(analysisTrace.durationMs), analysis.summary)
+        traces.append(analysisTrace)
 
-        let similar    = (try? await store.findSimilar(to: enriched)) ?? []
-        let hypothesis = try await HypothesisAgent(llm: llm).run(enriched, analysis, similarPast: similar)
+        let similar = (try? await store.findSimilar(to: enriched)) ?? []
+        let (hypothesis, hypothesisTrace) = try await runStage("hypothesis") {
+            try await HypothesisAgent(llm: llm).run(enriched, analysis, similarPast: similar)
+        }
         try guardOutput(hypothesis.rootCause, stage: "Hypothesis")
-        await emit("hypothesis", clock.now - t, hypothesis.rootCause)
-        t = clock.now
+        await emit("hypothesis", .milliseconds(hypothesisTrace.durationMs), hypothesis.rootCause)
+        traces.append(hypothesisTrace)
 
-        let critique = try await CriticAgent(llm: llm).run(enriched, hypothesis)
+        let (critique, critiqueTrace) = try await runStage("critic") {
+            try await CriticAgent(llm: llm).run(enriched, hypothesis)
+        }
         try guardOutput(critique.notes, stage: "Critic")
-        await emit("critic", clock.now - t, critique.notes)
-        t = clock.now
+        await emit("critic", .milliseconds(critiqueTrace.durationMs), critique.notes)
+        traces.append(critiqueTrace)
 
-        let fix = try await FixAgent(llm: llm).run(enriched, critique)
+        let (fix, fixTrace) = try await runStage("fix") {
+            try await FixAgent(llm: llm).run(enriched, critique)
+        }
         try guardOutput(fix.action, stage: "Fix")
-        await emit("fix", clock.now - t, fix.action)
-        t = clock.now
+        await emit("fix", .milliseconds(fixTrace.durationMs), fix.action)
+        traces.append(fixTrace)
 
-        let risk = try await RiskAgent(llm: llm).run(enriched, fix)
-        await emit("risk", clock.now - t, risk.rationale)
+        let (risk, riskTrace) = try await runStage("risk") {
+            try await RiskAgent(llm: llm).run(enriched, fix)
+        }
+        await emit("risk", .milliseconds(riskTrace.durationMs), risk.rationale)
+        traces.append(riskTrace)
 
         let report = IncidentReport(
             incident:   enriched,
@@ -65,13 +75,31 @@ public actor AgentPipeline {
             hypothesis: hypothesis,
             critique:   critique,
             fix:        fix,
-            risk:       risk
+            risk:       risk,
+            trace:      traces
         )
         try? await store.save(report)
         return report
     }
 
     // MARK: - Private
+
+    /// Runs one pipeline stage, capturing duration and LLM call metadata into a `StageTrace`.
+    ///
+    /// LLM metadata is collected via a task-local recorder bound for the duration of `body`.
+    /// Mock LLM implementations that don't touch `LLMRouter` simply yield empty `llmCalls`.
+    private func runStage<T: Sendable>(
+        _ stage: String,
+        body: @Sendable () async throws -> T
+    ) async throws -> (T, StageTrace) {
+        let recorder = LLMTraceRecorder()
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await LLMRouter.$recorder.withValue(recorder, operation: body)
+        let dur = durationMs(clock.now - start)
+        let calls = await recorder.snapshot()
+        return (result, StageTrace(stage: stage, durationMs: dur, llmCalls: calls))
+    }
 
     private func guardOutput(_ text: String, stage: String) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
