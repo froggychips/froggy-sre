@@ -9,7 +9,7 @@ let package = Package(
         .library(name: "FroggySRECore", targets: ["FroggySRECore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/froggychips/FroggyKit", from: "0.1.0"),
+        .package(url: "https://github.com/froggychips/FroggyKit", from: "0.3.1"),
     ],
     targets: [
         .target(
