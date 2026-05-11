@@ -6,12 +6,14 @@ import Foundation
 public struct SREDaemon: Sendable {
     private let socketPath: String
     private let pipeline: AgentPipeline
+    private let notifier: NotifierClient
 
     public init(socketPath: String? = nil) {
         self.socketPath = socketPath
             ?? ProcessInfo.processInfo.environment["FROGGY_SRE_SOCKET"]
             ?? "/tmp/froggy-sre.sock"
         self.pipeline = AgentPipeline()
+        self.notifier = NotifierClient()
     }
 
     public func run() async {
@@ -49,6 +51,11 @@ public struct SREDaemon: Sendable {
                 guard let incident = Self.readIncident(fd: client) else { return }
                 guard let report   = try? await pipeline.process(incident) else { return }
                 Self.writeReport(report, fd: client)
+                // Fire-and-forget webhook — does not block the socket response.
+                // No-op if FROGGY_SRE_NOTIFY_WEBHOOK is unset or risk < threshold.
+                Task.detached { [notifier] in
+                    await notifier.notifyIfCritical(report)
+                }
             }
         }
     }
